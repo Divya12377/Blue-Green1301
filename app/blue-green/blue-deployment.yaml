@@ -1,0 +1,39 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nodejs-app-blue
+  labels:
+    app: nodejs-app
+    version: blue
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: nodejs-app
+      version: blue
+  template:
+    metadata:
+      labels:
+        app: nodejs-app
+        version: blue
+    spec:
+      containers:
+      - name: nodejs-app
+        image: 603480426027.dkr.ecr.us-west-2.amazonaws.com/capgemini-eks:blue
+        ports:
+        - containerPort: 3000
+        env:
+        - name: APP_COLOR
+          value: "blue"
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 10
+          periodSeconds: 10
