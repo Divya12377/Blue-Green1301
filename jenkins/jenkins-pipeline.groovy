@@ -15,7 +15,7 @@ pipeline {
             steps {
                 script {
                     def color = env.BUILD_ID % 2 == 0 ? 'blue' : 'green'
-                    docker.build("${ECR_REPO}:${color}", "./app")
+                    sh "docker build -t ${ECR_REPO}:${color} ./app"
                 }
             }
         }
@@ -42,9 +42,14 @@ pipeline {
         stage('Switch Traffic') {
             steps {
                 dir('app/blue-green') {
-                    sh "./switch-traffic.sh"
+                    sh "chmod +x switch-traffic.sh && ./switch-traffic.sh"
                 }
             }
+        }
+    }
+    post {
+        always {
+            echo "Blue-green deployment completed successfully!"
         }
     }
 }

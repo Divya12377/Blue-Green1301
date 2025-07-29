@@ -9,6 +9,10 @@ managedNodeGroups:
     instanceType: t3.medium
     minSize: 2
     maxSize: 3
+    desiredCapacity: 2
     volumeSize: 20
     ssh:
       publicKeyName: eks-key
+    labels:
+      role: jenkins
+    taints: []

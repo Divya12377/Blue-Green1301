@@ -3,26 +3,55 @@ controller:
   servicePort: 80
   serviceAnnotations:
     service.beta.kubernetes.io/aws-load-balancer-type: nlb
+
   installPlugins:
     - kubernetes:1.31.4
     - workflow-aggregator:2.11
     - git:4.11.3
     - blueocean:1.25.8
+
   javaOpts: "-Xmx2048m"
+
   resources:
     requests:
       cpu: "500m"
       memory: "2048Mi"
     limits:
       memory: "4096Mi"
+
+  # ✅ Removed nodeSelector and tolerations for simplified scheduling
+  #   role: jenkins
+
+  #   - key: "role"
+  #     operator: "Equal"
+  #     value: "jenkins"
+  #     effect: "NoSchedule"
+
+  serviceAccount:
+    create: true
+
+  serviceAccountName: jenkins
+
   persistence:
     enabled: true
     storageClass: "gp2"
+    volumeMode: Filesystem
+    accessModes: ["ReadWriteOnce"]
     size: 8Gi
+
 agent:
   podTemplate:
-    spec:
-      containers:
+    label: "jenkins-agent"
+
+    # ✅ Removed nodeSelector and tolerations for simplified scheduling
+    #   role: jenkins
+
+    #   - key: "role"
+    #     operator: "Equal"
+    #     value: "jenkins"
+    #     effect: "NoSchedule"
+
+    containers:
       - name: jnlp
         resources:
           limits:
@@ -30,3 +59,4 @@ agent:
           requests:
             cpu: "200m"
             memory: "256Mi"
+
