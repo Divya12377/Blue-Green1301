@@ -20,8 +20,9 @@ controller:
       memory: "4096Mi"
 
   # ✅ Removed nodeSelector and tolerations for simplified scheduling
+  # nodeSelector:
   #   role: jenkins
-
+  # tolerations:
   #   - key: "role"
   #     operator: "Equal"
   #     value: "jenkins"
@@ -29,23 +30,44 @@ controller:
 
   serviceAccount:
     create: true
-
   serviceAccountName: jenkins
 
   persistence:
     enabled: true
-    storageClass: "gp2"
+    storageClass: "gp2"  # Do not modify during upgrade to avoid PVC issues
     volumeMode: Filesystem
     accessModes: ["ReadWriteOnce"]
     size: 8Gi
+
+  # ✅ Disable CSRF and create admin user for testing/demo purposes
+  initScripts:
+    create-admin-user.groovy: |
+      #!groovy
+
+      // Create admin user
+      def instance = jenkins.model.Jenkins.getInstance()
+      def hudsonRealm = new hudson.security.HudsonPrivateSecurityRealm(false)
+      hudsonRealm.createAccount("admin", "admin")
+      instance.setSecurityRealm(hudsonRealm)
+
+      // Authorize full control to logged-in users
+      def strategy = new hudson.security.FullControlOnceLoggedInAuthorizationStrategy()
+      strategy.setAllowAnonymousRead(false)
+      instance.setAuthorizationStrategy(strategy)
+
+      // Disable CSRF Protection
+      instance.setCrumbIssuer(null)
+
+      instance.save()
 
 agent:
   podTemplate:
     label: "jenkins-agent"
 
     # ✅ Removed nodeSelector and tolerations for simplified scheduling
+    # nodeSelector:
     #   role: jenkins
-
+    # tolerations:
     #   - key: "role"
     #     operator: "Equal"
     #     value: "jenkins"
@@ -53,6 +75,10 @@ agent:
 
     containers:
       - name: jnlp
+        image: jenkins/inbound-agent:latest
+        args:
+          - "$(JENKINS_SECRET)"
+          - "$(JENKINS_NAME)"
         resources:
           limits:
             memory: "512Mi"
