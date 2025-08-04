@@ -8,7 +8,7 @@ pipeline {
     stages {
         stage('Checkout') {
             steps {
-                git 'https://github.com/Divya12377/CapGemini_Assesement.git'
+                git branch: 'main', url: 'https://github.com/Divya12377/Blue-Green1301.git'
             }
         }
         stage('Build Docker Image') {
