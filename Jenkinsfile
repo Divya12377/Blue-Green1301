@@ -8,13 +8,16 @@ pipeline {
     stages {
         stage('Checkout') {
             steps {
-                git branch: 'main', url: 'https://github.com/Divya12377/Blue-Green1301.git'
+                git branch: 'main', 
+                     url: 'https://github.com/Divya12377/Blue-Green1301.git'
             }
         }
         stage('Build Docker Image') {
             steps {
                 script {
-                    def color = env.BUILD_ID % 2 == 0 ? 'blue' : 'green'
+                    // FIX: Convert BUILD_ID to integer first
+                    def buildId = env.BUILD_ID.toInteger()
+                    def color = buildId % 2 == 0 ? 'blue' : 'green'
                     sh "docker build -t ${ECR_REPO}:${color} ./app"
                 }
             }
@@ -22,9 +25,16 @@ pipeline {
         stage('Push to ECR') {
             steps {
                 script {
-                    def color = env.BUILD_ID % 2 == 0 ? 'blue' : 'green'
-                    withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'AWS_CREDENTIALS']]) {
-                        sh "aws ecr get-login-password --region ${REGION} | docker login --username AWS --password-stdin ${ECR_REPO}"
+                    def buildId = env.BUILD_ID.toInteger()
+                    def color = buildId % 2 == 0 ? 'blue' : 'green'
+                    withCredentials([[
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: 'AWS_CREDENTIALS'
+                    ]]) {
+                        sh """
+                            aws ecr get-login-password --region ${REGION} | \
+                            docker login --username AWS --password-stdin ${ECR_REPO}
+                        """
                         sh "docker push ${ECR_REPO}:${color}"
                     }
                 }
@@ -33,7 +43,8 @@ pipeline {
         stage('Deploy to Kubernetes') {
             steps {
                 script {
-                    def color = env.BUILD_ID % 2 == 0 ? 'blue' : 'green'
+                    def buildId = env.BUILD_ID.toInteger()
+                    def color = buildId % 2 == 0 ? 'blue' : 'green'
                     sh "kubectl set image deployment/nodejs-app-${color} nodejs-app=${ECR_REPO}:${color}"
                     sh "kubectl rollout status deployment/nodejs-app-${color}"
                 }
