@@ -25,6 +25,15 @@ spec:
         env:
         - name: APP_COLOR
           value: "green"
+        - name: PORT
+          value: "3000"
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
         readinessProbe:
           httpGet:
             path: /health

@@ -12,6 +12,10 @@ RUN npm install --only=production
 # Copy application code
 COPY index.js ./
 
+# Accept build argument for color (THIS WAS MISSING!)
+ARG APP_COLOR=blue
+ENV APP_COLOR=${APP_COLOR}
+
 # Expose port
 EXPOSE 3000
 
