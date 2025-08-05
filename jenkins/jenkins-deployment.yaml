@@ -14,9 +14,12 @@ spec:
         app: jenkins
     spec:
       serviceAccountName: jenkins
+      securityContext:
+        runAsUser: 0
       containers:
       - name: jenkins
         image: jenkins/jenkins:lts
+        imagePullPolicy: Always
         ports:
         - containerPort: 8080
         - containerPort: 50000
@@ -42,6 +45,9 @@ kind: Service
 metadata:
   name: jenkins
   namespace: jenkins
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-type: nlb
+    service.beta.kubernetes.io/aws-load-balancer-scheme: internet-facing
 spec:
   type: LoadBalancer
   ports:
