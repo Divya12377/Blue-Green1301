@@ -25,8 +25,9 @@ spec:
         volumeMounts:
         - name: jenkins-home
           mountPath: /var/jenkins_home
-        - name: docker-sock
-          mountPath: /var/run/docker.sock
+        - name: docker-certs
+          mountPath: /certs/client
+          readOnly: true
         env:
         - name: JAVA_OPTS
           value: "-Djenkins.install.runSetupWizard=false"
@@ -53,8 +54,6 @@ spec:
         volumeMounts:
         - name: docker-storage
           mountPath: /var/lib/docker
-        - name: docker-sock
-          mountPath: /var/run/docker.sock
         - name: docker-certs
           mountPath: /certs
         env:
@@ -73,8 +72,6 @@ spec:
       - name: jenkins-home
         emptyDir: {}
       - name: docker-storage
-        emptyDir: {}
-      - name: docker-sock
         emptyDir: {}
       - name: docker-certs
         emptyDir: {}
