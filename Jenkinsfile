@@ -2,11 +2,8 @@ pipeline {
     agent any
     
     environment {
-        // Docker configuration
         DOCKER_HOST = 'unix:///var/run/docker.sock'
         DOCKER_TLS_VERIFY = ''
-        
-        // AWS and application configuration
         AWS_DEFAULT_REGION = 'us-west-2'
         ECR_REPOSITORY = '603480426027.dkr.ecr.us-west-2.amazonaws.com/capgemini-eks'
         CLUSTER_NAME = 'capgemini-eks'
@@ -16,27 +13,58 @@ pipeline {
         stage('Docker Setup & Verification') {
             steps {
                 script {
-                    sh '''
+                    sh '''#!/bin/bash
                         echo "=== Docker Setup & Verification ==="
                         echo "Current user: $(whoami)"
                         echo "User groups: $(groups)"
                         
-                        # Verify Docker socket exists
-                        echo "Checking Docker socket..."
-                        if [ -S "/var/run/docker.sock" ]; then
-                            echo "✅ Docker socket exists"
-                            ls -l /var/run/docker.sock
-                        else
-                            echo "❌ Docker socket not found!"
+                        # Check common Docker socket paths
+                        SOCKET_PATHS=(
+                            "/var/run/docker.sock"
+                            "/run/docker.sock"
+                            "/host/var/run/docker.sock"
+                        )
+                        
+                        FOUND_SOCKET=""
+                        for path in "${SOCKET_PATHS[@]}"; do
+                            if [ -S "$path" ]; then
+                                echo "✅ Docker socket found at: $path"
+                                ls -l "$path"
+                                export DOCKER_HOST="unix://$path"
+                                FOUND_SOCKET=1
+                                break
+                            fi
+                        done
+                        
+                        if [ -z "$FOUND_SOCKET" ]; then
+                            echo "❌ No Docker socket found in common locations!"
                             echo "Troubleshooting:"
                             echo "1. Check host Docker: ls -l /var/run/docker.sock"
-                            echo "2. Verify container mount: docker inspect ${HOSTNAME} | grep docker.sock"
+                            echo "2. Verify container mounts: docker inspect ${HOSTNAME} | grep docker.sock"
+                            echo "3. Searching entire system for docker.sock..."
+                            find / -name docker.sock 2>/dev/null || true
                             exit 1
                         fi
                         
                         # Test Docker connection
                         echo "Testing Docker connection..."
-                        docker info || { echo "❌ Docker connection failed"; exit 1; }
+                        docker info || {
+                            echo "❌ Docker connection failed"
+                            echo "Trying alternative connection methods..."
+                            
+                            # Try different connection methods
+                            for method in "unix:///var/run/docker.sock" "unix:///run/docker.sock" "tcp://host.docker.internal:2375"; do
+                                echo "Attempting connection via: $method"
+                                DOCKER_HOST="$method" docker info && {
+                                    echo "✅ Connected via $method"
+                                    export DOCKER_HOST="$method"
+                                    return 0
+                                }
+                            done
+                            
+                            echo "❌ All connection attempts failed"
+                            exit 1
+                        }
                         echo "✅ Docker connection successful"
                     '''
                 }
