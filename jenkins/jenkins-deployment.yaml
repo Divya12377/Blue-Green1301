@@ -1,3 +1,43 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: jenkins-admin-secret
+  namespace: jenkins
+stringData:
+  password: "Divya@12377"  # Change to your strong password
+---
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: jenkins-init-script
+  namespace: jenkins
+data:
+  init.groovy: |
+    #!groovy
+    import jenkins.model.*
+    import hudson.security.*
+    import hudson.util.Secret
+    
+    // Get admin password from Kubernetes secret
+    def password = new File('/run/secrets/jenkins-admin-password').text.trim()
+    
+    def instance = Jenkins.getInstance()
+    def hudsonRealm = new HudsonPrivateSecurityRealm(false)
+    
+    // Create admin account with secret password
+    hudsonRealm.createAccount("admin", password)
+    instance.setSecurityRealm(hudsonRealm)
+    
+    // Set authorization strategy
+    def strategy = new FullControlOnceLoggedInAuthorizationStrategy()
+    strategy.setAllowAnonymousRead(false)
+    instance.setAuthorizationStrategy(strategy)
+    
+    // Save configuration
+    instance.save()
+---
+
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -13,69 +53,92 @@ spec:
       labels:
         app: jenkins
     spec:
+      securityContext:
+        fsGroup: 1000
       serviceAccountName: jenkins
+      initContainers:
+      - name: permission-fix
+        image: alpine:latest
+        command: ["sh", "-c", "chown -R 1000:1000 /var/jenkins_home"]
+        securityContext:
+          runAsUser: 0
+        volumeMounts:
+        - name: jenkins-home
+          mountPath: /var/jenkins_home
       containers:
-      # Jenkins main container
       - name: jenkins
-        image: 603480426027.dkr.ecr.us-west-2.amazonaws.com/jenkins-custom:latest
+        image: jenkins/jenkins:lts
         imagePullPolicy: Always
         ports:
         - containerPort: 8080
         - containerPort: 50000
-        volumeMounts:
-        - name: jenkins-home
-          mountPath: /var/jenkins_home
-        - name: docker-certs
-          mountPath: /certs/client
-          readOnly: true
         env:
         - name: JAVA_OPTS
           value: "-Djenkins.install.runSetupWizard=false"
-        - name: DOCKER_HOST
-          value: "tcp://localhost:2376"
-        - name: DOCKER_TLS_VERIFY
-          value: "1"
-        - name: DOCKER_CERT_PATH
-          value: "/certs/client"
-        resources:
-          requests:
-            memory: "1Gi"
-            cpu: "500m"
-          limits:
-            memory: "2Gi"
-            cpu: "1000m"
-      # Docker-in-Docker sidecar container
-      - name: docker-daemon
-        image: docker:20.10.7-dind
+        readinessProbe:
+          httpGet:
+            path: /login
+            port: 8080
+          initialDelaySeconds: 90
+          periodSeconds: 10
+          failureThreshold: 10
         securityContext:
-          privileged: true
-        ports:
-        - containerPort: 2376
+          runAsUser: 1000
+          runAsGroup: 1000
         volumeMounts:
-        - name: docker-storage
-          mountPath: /var/lib/docker
-        - name: docker-certs
-          mountPath: /certs
-        env:
-        - name: DOCKER_TLS_CERTDIR
-          value: "/certs"
-        - name: DOCKER_DRIVER
-          value: "overlay2"
-        resources:
-          requests:
-            memory: "512Mi"
-            cpu: "250m"
-          limits:
-            memory: "1Gi"
-            cpu: "500m"
+        - name: jenkins-home
+          mountPath: /var/jenkins_home
+        - name: init-script
+          mountPath: /var/jenkins_home/init.groovy.d/init.groovy
+          subPath: init.groovy
+        - name: admin-secret
+          mountPath: /run/secrets/jenkins-admin-password
+          subPath: password
+          readOnly: true
       volumes:
       - name: jenkins-home
-        emptyDir: {}
-      - name: docker-storage
-        emptyDir: {}
-      - name: docker-certs
-        emptyDir: {}
+        persistentVolumeClaim:
+          claimName: jenkins-pvc
+      - name: init-script
+        configMap:
+          name: jenkins-init-script
+      - name: admin-secret
+        secret:
+          secretName: jenkins-admin-secret
+          optional: false
+
 ---
+
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: jenkins-pv
+spec:
+  storageClassName: manual
+  capacity:
+    storage: 8Gi
+  accessModes:
+    - ReadWriteOnce
+  hostPath:
+    path: "/data/jenkins"
+
+---
+
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: jenkins-pvc
+  namespace: jenkins
+spec:
+  storageClassName: manual
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 8Gi
+
+---
+
 apiVersion: v1
 kind: Service
 metadata:
@@ -97,13 +160,17 @@ spec:
     protocol: TCP
   selector:
     app: jenkins
+
 ---
+
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: jenkins
   namespace: jenkins
+
 ---
+
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:

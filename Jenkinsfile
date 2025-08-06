@@ -1,5 +1,30 @@
 pipeline {
-    agent any
+    agent {
+        kubernetes {
+            label 'docker-agent'
+            yaml """
+apiVersion: v1
+kind: Pod
+spec:
+  containers:
+  - name: jnlp
+    image: jenkins/inbound-agent:latest
+    volumeMounts:
+      - name: docker-sock
+        mountPath: /var/run/docker.sock
+  - name: dind
+    image: docker:dind
+    securityContext:
+      privileged: true
+    volumeMounts:
+      - name: docker-sock
+        mountPath: /var/run
+  volumes:
+  - name: docker-sock
+    emptyDir: {}
+"""
+        }
+    }
     
     environment {
         DOCKER_HOST = 'unix:///var/run/docker.sock'
@@ -10,67 +35,6 @@ pipeline {
     }
     
     stages {
-        stage('Docker Setup & Verification') {
-            steps {
-                script {
-                    sh '''#!/bin/bash
-                        echo "=== Docker Setup & Verification ==="
-                        echo "Current user: $(whoami)"
-                        echo "User groups: $(groups)"
-                        
-                        # Check common Docker socket paths
-                        SOCKET_PATHS=(
-                            "/var/run/docker.sock"
-                            "/run/docker.sock"
-                            "/host/var/run/docker.sock"
-                        )
-                        
-                        FOUND_SOCKET=""
-                        for path in "${SOCKET_PATHS[@]}"; do
-                            if [ -S "$path" ]; then
-                                echo "✅ Docker socket found at: $path"
-                                ls -l "$path"
-                                export DOCKER_HOST="unix://$path"
-                                FOUND_SOCKET=1
-                                break
-                            fi
-                        done
-                        
-                        if [ -z "$FOUND_SOCKET" ]; then
-                            echo "❌ No Docker socket found in common locations!"
-                            echo "Troubleshooting:"
-                            echo "1. Check host Docker: ls -l /var/run/docker.sock"
-                            echo "2. Verify container mounts: docker inspect ${HOSTNAME} | grep docker.sock"
-                            echo "3. Searching entire system for docker.sock..."
-                            find / -name docker.sock 2>/dev/null || true
-                            exit 1
-                        fi
-                        
-                        # Test Docker connection
-                        echo "Testing Docker connection..."
-                        docker info || {
-                            echo "❌ Docker connection failed"
-                            echo "Trying alternative connection methods..."
-                            
-                            # Try different connection methods
-                            for method in "unix:///var/run/docker.sock" "unix:///run/docker.sock" "tcp://host.docker.internal:2375"; do
-                                echo "Attempting connection via: $method"
-                                DOCKER_HOST="$method" docker info && {
-                                    echo "✅ Connected via $method"
-                                    export DOCKER_HOST="$method"
-                                    return 0
-                                }
-                            done
-                            
-                            echo "❌ All connection attempts failed"
-                            exit 1
-                        }
-                        echo "✅ Docker connection successful"
-                    '''
-                }
-            }
-        }
-
         stage('Checkout') {
             steps {
                 git branch: 'main', 
@@ -78,25 +42,50 @@ pipeline {
             }
         }
         
+        stage('Docker Setup & Verification') {
+            steps {
+                script {
+                    sh '''
+                        echo "=== Docker Setup & Verification ==="
+                        echo "Using DOCKER_HOST: $DOCKER_HOST"
+                        
+                        # Verify Docker socket
+                        if [ -S "/var/run/docker.sock" ]; then
+                            echo "✅ Docker socket found at: /var/run/docker.sock"
+                            ls -l /var/run/docker.sock
+                        else
+                            echo "❌ Docker socket not found!"
+                            exit 1
+                        fi
+                        
+                        # Test Docker connection
+                        echo "Testing Docker connection..."
+                        docker info || {
+                            echo "❌ Docker connection failed"
+                            exit 1
+                        }
+                        echo "✅ Docker connection successful"
+                    '''
+                }
+            }
+        }
+        
         stage('Verify Environment') {
             steps {
                 script {
                     sh '''
-                        export DOCKER_HOST="unix:///var/run/docker.sock"
-                        unset DOCKER_TLS_VERIFY
-                        
                         echo "Checking Docker installation..."
-                        docker --version || { echo "❌ Docker not found!"; exit 1; }
+                        docker --version
                         
                         echo "Checking AWS CLI..."
-                        aws --version || { echo "❌ AWS CLI not found!"; exit 1; }
+                        aws --version
                         
                         echo "Checking kubectl..."
-                        kubectl version --client || { echo "❌ kubectl not found!"; exit 1; }
+                        kubectl version --client
                         
                         echo "Verifying workspace contents..."
                         ls -la
-                        ls -la app/ || { echo "❌ App directory not found!"; exit 1; }
+                        ls -la app/
                         
                         echo "✅ All environment dependencies verified"
                     '''
