@@ -5,7 +5,6 @@ pipeline {
         // Docker configuration
         DOCKER_HOST = 'unix:///var/run/docker.sock'
         DOCKER_TLS_VERIFY = ''
-        DOCKER_CERT_PATH = ''
         
         // AWS and application configuration
         AWS_DEFAULT_REGION = 'us-west-2'
@@ -22,31 +21,23 @@ pipeline {
                         echo "Current user: $(whoami)"
                         echo "User groups: $(groups)"
                         
-                        # Check Docker socket permissions
-                        echo "Docker socket permissions:"
-                        ls -l /var/run/docker.sock || echo "❌ Docker socket not found"
-                        
-                        # Set Docker environment variables
-                        export DOCKER_HOST="unix:///var/run/docker.sock"
-                        unset DOCKER_TLS_VERIFY
-                        
-                        # Test Docker connection
-                        echo "Testing Docker connectivity..."
-                        timeout 30 bash -c "while ! docker info &>/dev/null; do
-                            echo 'Waiting for Docker daemon...';
-                            sleep 5;
-                        done"
-                        
-                        if docker info; then
-                            echo "✅ Docker connection successful"
+                        # Verify Docker socket exists
+                        echo "Checking Docker socket..."
+                        if [ -S "/var/run/docker.sock" ]; then
+                            echo "✅ Docker socket exists"
+                            ls -l /var/run/docker.sock
                         else
-                            echo "❌ Docker connection failed"
+                            echo "❌ Docker socket not found!"
                             echo "Troubleshooting:"
-                            echo "1. Check Docker daemon is running: systemctl status docker"
-                            echo "2. Verify socket permissions: ls -l /var/run/docker.sock"
-                            echo "3. Ensure Jenkins user is in docker group: groups"
+                            echo "1. Check host Docker: ls -l /var/run/docker.sock"
+                            echo "2. Verify container mount: docker inspect ${HOSTNAME} | grep docker.sock"
                             exit 1
                         fi
+                        
+                        # Test Docker connection
+                        echo "Testing Docker connection..."
+                        docker info || { echo "❌ Docker connection failed"; exit 1; }
+                        echo "✅ Docker connection successful"
                     '''
                 }
             }
