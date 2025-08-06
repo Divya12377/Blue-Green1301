@@ -2,7 +2,7 @@ pipeline {
     agent any
     
     environment {
-        // Docker configuration to fix the TLS issue
+        // Docker configuration
         DOCKER_HOST = 'unix:///var/run/docker.sock'
         DOCKER_TLS_VERIFY = ''
         DOCKER_CERT_PATH = ''
@@ -14,6 +14,44 @@ pipeline {
     }
     
     stages {
+        stage('Docker Setup & Verification') {
+            steps {
+                script {
+                    sh '''
+                        echo "=== Docker Setup & Verification ==="
+                        echo "Current user: $(whoami)"
+                        echo "User groups: $(groups)"
+                        
+                        # Check Docker socket permissions
+                        echo "Docker socket permissions:"
+                        ls -l /var/run/docker.sock || echo "❌ Docker socket not found"
+                        
+                        # Set Docker environment variables
+                        export DOCKER_HOST="unix:///var/run/docker.sock"
+                        unset DOCKER_TLS_VERIFY
+                        
+                        # Test Docker connection
+                        echo "Testing Docker connectivity..."
+                        timeout 30 bash -c "while ! docker info &>/dev/null; do
+                            echo 'Waiting for Docker daemon...';
+                            sleep 5;
+                        done"
+                        
+                        if docker info; then
+                            echo "✅ Docker connection successful"
+                        else
+                            echo "❌ Docker connection failed"
+                            echo "Troubleshooting:"
+                            echo "1. Check Docker daemon is running: systemctl status docker"
+                            echo "2. Verify socket permissions: ls -l /var/run/docker.sock"
+                            echo "3. Ensure Jenkins user is in docker group: groups"
+                            exit 1
+                        fi
+                    '''
+                }
+            }
+        }
+
         stage('Checkout') {
             steps {
                 git branch: 'main', 
@@ -21,47 +59,27 @@ pipeline {
             }
         }
         
-        stage('Wait for Docker Daemon') {
-            steps {
-                script {
-                    sh '''
-                        export DOCKER_TLS_VERIFY=""
-                        export DOCKER_HOST="unix:///var/run/docker.sock"
-                        echo "Waiting for Docker daemon to be ready..."
-                        for i in {1..30}; do
-                            if docker info >/dev/null 2>&1; then
-                                echo "Docker daemon is ready!"
-                                break
-                            fi
-                            echo "Waiting for Docker daemon... ($i/30)"
-                            sleep 10
-                        done
-                        
-                        # Verify Docker is working
-                        docker info
-                    '''
-                }
-            }
-        }
-        
         stage('Verify Environment') {
             steps {
                 script {
                     sh '''
-                        export DOCKER_TLS_VERIFY=""
                         export DOCKER_HOST="unix:///var/run/docker.sock"
+                        unset DOCKER_TLS_VERIFY
+                        
                         echo "Checking Docker installation..."
-                        docker --version || { echo "Docker not found!"; exit 1; }
+                        docker --version || { echo "❌ Docker not found!"; exit 1; }
                         
                         echo "Checking AWS CLI..."
-                        aws --version || { echo "AWS CLI not found!"; exit 1; }
+                        aws --version || { echo "❌ AWS CLI not found!"; exit 1; }
                         
                         echo "Checking kubectl..."
-                        kubectl version --client || { echo "kubectl not found!"; exit 1; }
+                        kubectl version --client || { echo "❌ kubectl not found!"; exit 1; }
                         
                         echo "Verifying workspace contents..."
                         ls -la
-                        ls -la app/ || { echo "App directory not found!"; exit 1; }
+                        ls -la app/ || { echo "❌ App directory not found!"; exit 1; }
+                        
+                        echo "✅ All environment dependencies verified"
                     '''
                 }
             }
@@ -73,10 +91,15 @@ pipeline {
                                 credentialsId: 'aws-credentials']]) {
                     script {
                         sh '''
-                            export DOCKER_TLS_VERIFY=""
                             export DOCKER_HOST="unix:///var/run/docker.sock"
+                            unset DOCKER_TLS_VERIFY
+                            
                             echo "Logging into AWS ECR..."
-                            aws ecr get-login-password --region ${AWS_DEFAULT_REGION} | docker login --username AWS --password-stdin ${ECR_REPOSITORY}
+                            aws ecr get-login-password --region ${AWS_DEFAULT_REGION} | \
+                                docker login --username AWS --password-stdin ${ECR_REPOSITORY} || \
+                                { echo "❌ ECR login failed"; exit 1; }
+                                
+                            echo "✅ Successfully logged into ECR"
                         '''
                     }
                 }
@@ -87,21 +110,23 @@ pipeline {
             steps {
                 script {
                     sh '''
-                        export DOCKER_TLS_VERIFY=""
                         export DOCKER_HOST="unix:///var/run/docker.sock"
+                        unset DOCKER_TLS_VERIFY
+                        
                         echo "Building Blue version..."
-                        cd app
                         docker build -t ${ECR_REPOSITORY}:blue \
-                            --build-arg APP_COLOR=blue .
-                    '''
-                    
-                    sh '''
-                        export DOCKER_TLS_VERIFY=""
-                        export DOCKER_HOST="unix:///var/run/docker.sock"
+                            --build-arg APP_COLOR=blue \
+                            -f app/Dockerfile app/ || \
+                            { echo "❌ Blue build failed"; exit 1; }
+                            
                         echo "Building Green version..."
-                        cd app
                         docker build -t ${ECR_REPOSITORY}:green \
-                            --build-arg APP_COLOR=green .
+                            --build-arg APP_COLOR=green \
+                            -f app/Dockerfile app/ || \
+                            { echo "❌ Green build failed"; exit 1; }
+                            
+                        echo "✅ Images built successfully"
+                        docker images | grep ${ECR_REPOSITORY}
                     '''
                 }
             }
@@ -113,13 +138,18 @@ pipeline {
                                 credentialsId: 'aws-credentials']]) {
                     script {
                         sh '''
-                            export DOCKER_TLS_VERIFY=""
                             export DOCKER_HOST="unix:///var/run/docker.sock"
+                            unset DOCKER_TLS_VERIFY
+                            
                             echo "Pushing Blue image to ECR..."
-                            docker push ${ECR_REPOSITORY}:blue
+                            docker push ${ECR_REPOSITORY}:blue || \
+                                { echo "❌ Blue push failed"; exit 1; }
                             
                             echo "Pushing Green image to ECR..."
-                            docker push ${ECR_REPOSITORY}:green
+                            docker push ${ECR_REPOSITORY}:green || \
+                                { echo "❌ Green push failed"; exit 1; }
+                                
+                            echo "✅ Images pushed successfully"
                         '''
                     }
                 }
@@ -133,8 +163,12 @@ pipeline {
                     script {
                         sh '''
                             echo "Updating kubeconfig..."
-                            aws eks update-kubeconfig --name ${CLUSTER_NAME} --region ${AWS_DEFAULT_REGION}
+                            aws eks update-kubeconfig --name ${CLUSTER_NAME} --region ${AWS_DEFAULT_REGION} || \
+                                { echo "❌ kubeconfig update failed"; exit 1; }
+                                
+                            echo "Current context:"
                             kubectl config current-context
+                            echo "✅ kubeconfig updated"
                         '''
                     }
                 }
@@ -146,15 +180,22 @@ pipeline {
                 script {
                     sh '''
                         echo "Applying Kubernetes manifests..."
-                        kubectl apply -f app/blue-green/service.yaml
-                        kubectl apply -f app/blue-green/blue-deployment.yaml
-                        kubectl apply -f app/blue-green/green-deployment.yaml
-                        kubectl apply -f app/blue-green/ingress.yaml
+                        kubectl apply -f app/blue-green/service.yaml || \
+                            { echo "❌ Service apply failed"; exit 1; }
+                        kubectl apply -f app/blue-green/blue-deployment.yaml || \
+                            { echo "❌ Blue deployment apply failed"; exit 1; }
+                        kubectl apply -f app/blue-green/green-deployment.yaml || \
+                            { echo "❌ Green deployment apply failed"; exit 1; }
+                        kubectl apply -f app/blue-green/ingress.yaml || \
+                            { echo "❌ Ingress apply failed"; exit 1; }
                         
                         echo "Waiting for deployments to be ready..."
-                        kubectl rollout status deployment/nodejs-app-blue --timeout=300s
-                        kubectl rollout status deployment/nodejs-app-green --timeout=300s
+                        kubectl rollout status deployment/nodejs-app-blue --timeout=5m || \
+                            { echo "❌ Blue rollout failed"; exit 1; }
+                        kubectl rollout status deployment/nodejs-app-green --timeout=5m || \
+                            { echo "❌ Green rollout failed"; exit 1; }
                         
+                        echo "✅ Deployments ready"
                         echo "Current deployment status:"
                         kubectl get pods -l app=nodejs-app
                         kubectl get svc nodejs-app-service
@@ -170,24 +211,29 @@ pipeline {
                         echo "Performing health checks..."
                         
                         # Wait for service to get external IP
+                        echo "Waiting for service to stabilize..."
                         sleep 60
                         
                         # Get service URL
                         SERVICE_URL=$(kubectl get svc nodejs-app-service -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
                         if [ -z "$SERVICE_URL" ]; then
-                            echo "Warning: Service URL not available yet"
+                            echo "⚠️ Service URL not available yet"
                             # Try to get ClusterIP instead
                             CLUSTER_IP=$(kubectl get svc nodejs-app-service -o jsonpath='{.spec.clusterIP}')
                             echo "Service ClusterIP: $CLUSTER_IP"
                         else
-                            echo "Service URL: http://$SERVICE_URL"
-                            # Optional: Add curl health check here
-                            # curl -f "http://$SERVICE_URL/health" || echo "Health check failed"
+                            echo "✅ Service URL: http://$SERVICE_URL"
+                            echo "Performing health check..."
+                            curl -f "http://$SERVICE_URL" || \
+                                { echo "❌ Health check failed"; exit 1; }
                         fi
                         
                         # Verify pods are running
-                        kubectl get pods -l app=nodejs-app
-                        kubectl wait --for=condition=ready pod -l app=nodejs-app --timeout=300s
+                        echo "Verifying pod status..."
+                        kubectl wait --for=condition=ready pod -l app=nodejs-app --timeout=5m || \
+                            { echo "❌ Pods not ready"; exit 1; }
+                            
+                        echo "✅ All pods ready"
                     '''
                 }
             }
@@ -201,8 +247,13 @@ pipeline {
                 script {
                     sh '''
                         echo "Switching traffic..."
-                        chmod +x app/blue-green/switch-traffic.sh
-                        ./app/blue-green/switch-traffic.sh
+                        if [ -f "app/blue-green/switch-traffic.sh" ]; then
+                            chmod +x app/blue-green/switch-traffic.sh
+                            ./app/blue-green/switch-traffic.sh || \
+                                { echo "❌ Traffic switch failed"; exit 1; }
+                        else
+                            echo "⚠️ Traffic switch script not found"
+                        fi
                     '''
                 }
             }
@@ -211,23 +262,37 @@ pipeline {
     
     post {
         success {
-            echo 'Blue-green deployment completed successfully!'
+            echo '🎉 Blue-green deployment completed successfully!'
             script {
                 sh '''
                     echo "=== Deployment Summary ==="
                     kubectl get deployments -l app=nodejs-app
                     kubectl get svc nodejs-app-service
+                    kubectl get ingress
                     echo "==========================="
                 '''
             }
         }
         failure {
-            echo 'Deployment failed! Check the logs above.'
+            echo '❌ Deployment failed! Check the logs above.'
+            script {
+                sh '''
+                    echo "=== FAILURE DEBUGGING ==="
+                    echo "Docker info:"
+                    docker info || true
+                    echo "Kubernetes pods:"
+                    kubectl get pods -o wide || true
+                    echo "Kubernetes events:"
+                    kubectl get events --sort-by='.metadata.creationTimestamp' || true
+                    echo "=========================="
+                '''
+            }
         }
         always {
             sh '''
-                export DOCKER_TLS_VERIFY=""
                 export DOCKER_HOST="unix:///var/run/docker.sock"
+                unset DOCKER_TLS_VERIFY
+                
                 echo "Cleaning up Docker images..."
                 docker image prune -f || true
             '''
