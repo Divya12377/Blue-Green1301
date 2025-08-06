@@ -14,11 +14,10 @@ spec:
         app: jenkins
     spec:
       serviceAccountName: jenkins
-      securityContext:
-        runAsUser: 0
       containers:
+      # Jenkins main container
       - name: jenkins
-        image: jenkins/jenkins:lts
+        image: 603480426027.dkr.ecr.us-west-2.amazonaws.com/jenkins-custom:latest
         imagePullPolicy: Always
         ports:
         - containerPort: 8080
@@ -26,9 +25,17 @@ spec:
         volumeMounts:
         - name: jenkins-home
           mountPath: /var/jenkins_home
+        - name: docker-sock
+          mountPath: /var/run/docker.sock
         env:
         - name: JAVA_OPTS
           value: "-Djenkins.install.runSetupWizard=false"
+        - name: DOCKER_HOST
+          value: "tcp://localhost:2376"
+        - name: DOCKER_TLS_VERIFY
+          value: "1"
+        - name: DOCKER_CERT_PATH
+          value: "/certs/client"
         resources:
           requests:
             memory: "1Gi"
@@ -36,8 +43,40 @@ spec:
           limits:
             memory: "2Gi"
             cpu: "1000m"
+      # Docker-in-Docker sidecar container
+      - name: docker-daemon
+        image: docker:20.10.7-dind
+        securityContext:
+          privileged: true
+        ports:
+        - containerPort: 2376
+        volumeMounts:
+        - name: docker-storage
+          mountPath: /var/lib/docker
+        - name: docker-sock
+          mountPath: /var/run/docker.sock
+        - name: docker-certs
+          mountPath: /certs
+        env:
+        - name: DOCKER_TLS_CERTDIR
+          value: "/certs"
+        - name: DOCKER_DRIVER
+          value: "overlay2"
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
       volumes:
       - name: jenkins-home
+        emptyDir: {}
+      - name: docker-storage
+        emptyDir: {}
+      - name: docker-sock
+        emptyDir: {}
+      - name: docker-certs
         emptyDir: {}
 ---
 apiVersion: v1

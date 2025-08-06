@@ -5,12 +5,36 @@ pipeline {
         AWS_DEFAULT_REGION = 'us-west-2'
         ECR_REPOSITORY = '603480426027.dkr.ecr.us-west-2.amazonaws.com/capgemini-eks'
         CLUSTER_NAME = 'capgemini-eks'
+        DOCKER_HOST = 'tcp://localhost:2376'
+        DOCKER_TLS_VERIFY = '1'
+        DOCKER_CERT_PATH = '/certs/client'
     }
     
     stages {
         stage('Checkout') {
             steps {
                 git branch: 'main', url: 'https://github.com/Divya12377/Blue-Green1301.git'
+            }
+        }
+        
+        stage('Wait for Docker Daemon') {
+            steps {
+                script {
+                    sh '''
+                        echo "Waiting for Docker daemon to be ready..."
+                        for i in {1..30}; do
+                            if docker info >/dev/null 2>&1; then
+                                echo "Docker daemon is ready!"
+                                break
+                            fi
+                            echo "Waiting for Docker daemon... ($i/30)"
+                            sleep 10
+                        done
+                        
+                        # Verify Docker is working
+                        docker info
+                    '''
+                }
             }
         }
         
@@ -37,11 +61,14 @@ pipeline {
         
         stage('AWS ECR Login') {
             steps {
-                script {
-                    sh '''
-                        echo "Logging into AWS ECR..."
-                        aws ecr get-login-password --region ${AWS_DEFAULT_REGION} | docker login --username AWS --password-stdin ${ECR_REPOSITORY}
-                    '''
+                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', 
+                                credentialsId: 'aws-credentials']]) {
+                    script {
+                        sh '''
+                            echo "Logging into AWS ECR..."
+                            aws ecr get-login-password --region ${AWS_DEFAULT_REGION} | docker login --username AWS --password-stdin ${ECR_REPOSITORY}
+                        '''
+                    }
                 }
             }
         }
@@ -70,26 +97,32 @@ pipeline {
         
         stage('Push to ECR') {
             steps {
-                script {
-                    sh '''
-                        echo "Pushing Blue image to ECR..."
-                        docker push ${ECR_REPOSITORY}:blue
-                        
-                        echo "Pushing Green image to ECR..."
-                        docker push ${ECR_REPOSITORY}:green
-                    '''
+                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', 
+                                credentialsId: 'aws-credentials']]) {
+                    script {
+                        sh '''
+                            echo "Pushing Blue image to ECR..."
+                            docker push ${ECR_REPOSITORY}:blue
+                            
+                            echo "Pushing Green image to ECR..."
+                            docker push ${ECR_REPOSITORY}:green
+                        '''
+                    }
                 }
             }
         }
         
         stage('Update Kubeconfig') {
             steps {
-                script {
-                    sh '''
-                        echo "Updating kubeconfig..."
-                        aws eks update-kubeconfig --name ${CLUSTER_NAME} --region ${AWS_DEFAULT_REGION}
-                        kubectl config current-context
-                    '''
+                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', 
+                                credentialsId: 'aws-credentials']]) {
+                    script {
+                        sh '''
+                            echo "Updating kubeconfig..."
+                            aws eks update-kubeconfig --name ${CLUSTER_NAME} --region ${AWS_DEFAULT_REGION}
+                            kubectl config current-context
+                        '''
+                    }
                 }
             }
         }
